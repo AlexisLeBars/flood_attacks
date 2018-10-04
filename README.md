@@ -10,5 +10,5 @@ Introduction :
 
 How to use :
 
-- First compile the file using a c comiler like gcc
+- First compile the file using a C compiler like gcc
 - Then use ```$flood help``` to have a full description of all the parameters
